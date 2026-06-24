@@ -221,4 +221,4 @@ To explore the database with SQL directly:
 B.Tech, Production & Industrial Engineering  
 National Institute of Technology, Jamshedpur  
 📧 2023ugpi030@nitjsr.ac.in  
-🔗 [LinkedIn](https://linkedin.com/in/rani-sharma) · [GitHub](https://github.com/rani-86)
+🔗 [LinkedIn](https://www.linkedin.com/in/rani-sharma/) · [GitHub](https://github.com/rani-86)
