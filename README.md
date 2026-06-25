@@ -7,6 +7,9 @@
 
 ## 🎯 Business Problem
 
+Live Dashboard:
+https://rani-86.github.io/sql_bi_dashboard/
+
 E-commerce and retail businesses generate thousands of transactions daily — but raw data alone doesn't drive decisions. Business leaders need answers to questions like:
 
 - **Which product categories are driving the most profit?**
