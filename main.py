@@ -29,7 +29,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"""
 📊 Open your dashboard:
-   → reports/bi_dashboard.html  (open in any browser)
+   → reports/index.html  (open in any browser)
 
 🗄️  Explore the database:
    → data/business.db  (open with DB Browser for SQLite)

@@ -136,7 +136,7 @@ def chart_city(df):
 
 
 # ── HTML Report Generator ─────────────────────────────────────────────────
-def generate_html_report(kpis: dict, output="reports/bi_dashboard.html"):
+def generate_html_report(kpis: dict, output="reports/index.html"):
     summary = kpis["revenue_summary"].iloc[0]
 
     img_trend    = chart_monthly_revenue(kpis["monthly_trend"])
@@ -285,9 +285,17 @@ def generate_html_report(kpis: dict, output="reports/bi_dashboard.html"):
 
 </body></html>"""
 
-    with open(output, "w") as f:
+    with open(output, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✅ Dashboard saved → {output}")
+
+    # Also mirror to root index.html — that's what GitHub Pages actually
+    # serves at rani-86.github.io/sql_bi_dashboard/.
+    root_copy = "index.html"
+    with open(root_copy, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"✅ Dashboard mirrored → {root_copy} (GitHub Pages)")
+
     return output
 
 

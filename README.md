@@ -105,7 +105,7 @@ sql_bi_dashboard/
 │   └── business.db       ← SQLite database
 │
 ├── reports/
-│   └── bi_dashboard.html ← Open this in your browser to see the dashboard
+│   └── index.html        ← Open this in your browser to see the dashboard
 │
 └── requirements.txt
 ```
@@ -159,6 +159,7 @@ ORDER BY cohort_month, activity_month;
 | **GROUP BY + aggregations** | Revenue, orders, AOV per segment/category/city |
 | **Subqueries** | Cohort size calculation |
 | **STRFTIME** | Time-series grouping by month and week |
+| **Triggers** | `trg_log_order_status_change` auto-logs every order status transition (Processing → Completed/Returned/Cancelled) into `order_audit_log` |
 
 ---
 
@@ -188,7 +189,7 @@ pip install -r requirements.txt
 python main.py
 
 # 3. Open dashboard in browser
-# → reports/bi_dashboard.html (double-click the file)
+# → reports/index.html (double-click the file)
 ```
 
 To explore the database with SQL directly:

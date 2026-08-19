@@ -30,6 +30,36 @@ GROUP BY status;
 
 
 -- ============================================================
+-- TRIGGER: Order status audit trail
+-- ============================================================
+-- Defined in data_generator.py's SCHEMA (SQLite requires DDL at table
+-- creation time). Every order is inserted as 'Processing' and then moved
+-- to its final status via UPDATE, which is what actually fires this
+-- trigger — order_audit_log ends up with exactly one row per order,
+-- not a hand-seeded example table.
+--
+-- CREATE TRIGGER trg_log_order_status_change
+-- AFTER UPDATE OF status ON orders
+-- FOR EACH ROW
+-- WHEN OLD.status IS NOT NEW.status
+-- BEGIN
+--     INSERT INTO order_audit_log (order_id, old_status, new_status)
+--     VALUES (NEW.order_id, OLD.status, NEW.status);
+-- END;
+
+-- T1: Verify the trigger fired for every order (counts should match)
+SELECT
+    (SELECT COUNT(*) FROM orders)          AS total_orders,
+    (SELECT COUNT(*) FROM order_audit_log) AS total_audit_rows;
+
+-- T2: Status transition breakdown captured by the trigger
+SELECT old_status, new_status, COUNT(*) AS cnt
+FROM order_audit_log
+GROUP BY old_status, new_status
+ORDER BY cnt DESC;
+
+
+-- ============================================================
 -- SILVER LAYER: Cleaned, joined, enriched views
 -- ============================================================
 
