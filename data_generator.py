@@ -148,7 +148,12 @@ def generate_data(conn):
     print("  Generating customers...")
     customer_tiers = {}
     for i in range(1, N_CUSTOMERS + 1):
-        signup = START + timedelta(days=int(rng.integers(0, 900)))
+        # Spread signups across nearly the entire window (not just the
+        # first 900 of ~1095 days) — otherwise acquisition effectively
+        # stops 6 months before the data ends, which makes the final
+        # months' "active customers" almost entirely returning by
+        # definition rather than reflecting real retention behavior.
+        signup = START + timedelta(days=int(rng.integers(0, TOTAL_DAYS - 30)))
         city = rng.choice(CITIES, p=CITY_WEIGHTS)
         segment = rng.choice(SEGMENTS, p=SEGMENT_WEIGHTS)
         tier = rng.choice(TIERS, p=TIER_WEIGHTS)

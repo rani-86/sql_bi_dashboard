@@ -135,6 +135,115 @@ def chart_city(df):
     return fig_to_b64(fig)
 
 
+# ── Business insight text (computed live from the KPI tables, not
+#    hardcoded — these numbers change whenever the underlying data does) ──
+def insight_revenue_trend(df):
+    # Compare full-year totals rather than single months — the first
+    # month or two is a near-zero ramp-up artifact (few customers have
+    # signed up yet), so a point-to-point comparison there produces a
+    # meaningless four-digit "growth %" instead of a real trend read.
+    yearly = df.assign(year=df["month"].str.slice(0, 4)).groupby("year")["revenue"].sum()
+    first_year, last_year = yearly.index[0], yearly.index[-1]
+    growth_pct = (yearly.iloc[-1] - yearly.iloc[0]) / yearly.iloc[0] * 100
+    peak = df.loc[df["revenue"].idxmax()]
+    return (
+        f"Annual revenue grew from ₹{yearly.iloc[0]/1e6:.1f}M in {first_year} to "
+        f"₹{yearly.iloc[-1]/1e6:.1f}M in {last_year} ({growth_pct:+.0f}%), tracking the "
+        f"growing customer base over the period. The single strongest month was "
+        f"{peak['month']} at ₹{peak['revenue']/1e6:.1f}M — worth checking what drove that "
+        f"spike (promotion, seasonality, cohort effect) so it can be repeated deliberately."
+    )
+
+
+def insight_category(df):
+    top = df.iloc[0]
+    best_margin = df.loc[df["margin_pct"].idxmax()]
+    worst_margin = df.loc[df["margin_pct"].idxmin()]
+    share_pct = top["revenue"] / df["revenue"].sum() * 100
+    return (
+        f"{top['category']} is the single biggest revenue driver at "
+        f"₹{top['revenue']/1e6:.1f}M ({share_pct:.0f}% of total). "
+        f"{best_margin['category']} carries the healthiest margin ({best_margin['margin_pct']:.0f}%), "
+        f"while {worst_margin['category']} is thin at {worst_margin['margin_pct']:.0f}% — "
+        f"high volume there is propping up revenue, not profit. "
+        f"A pricing or bundling review on {worst_margin['category']} would move the needle "
+        f"more than chasing more volume in it."
+    )
+
+
+def insight_retention(df):
+    avg_rate = (df["returning_customers"] / df["active_customers"] * 100).mean()
+
+    # Skip month 1 (there's no prior cohort to return from yet, so it's
+    # definitionally near-0% and not a real signal) and compare 3-month
+    # windows rather than single months, which smooths out small-sample
+    # noise from months with few active customers.
+    stable = df.iloc[1:] if len(df) > 3 else df
+    w = min(3, len(stable))
+    early = stable.iloc[:w]
+    late = stable.iloc[-w:]
+    early_rate = early["returning_customers"].sum() / early["active_customers"].sum() * 100
+    late_rate = late["returning_customers"].sum() / late["active_customers"].sum() * 100
+    if abs(late_rate - early_rate) < 3:
+        trend = "held roughly steady"
+    else:
+        trend = "improved" if late_rate > early_rate else "weakened"
+    return (
+        f"On average {avg_rate:.0f}% of active customers each month are returning buyers, "
+        f"not new ones. Excluding the very first month (no prior cohort exists yet to return "
+        f"from), the returning-customer share has {trend} ({early_rate:.0f}% → {late_rate:.0f}%). "
+        f"Since a large share of the customer base is one-time or occasional buyers rather than "
+        f"loyal repeat customers, a post-first-purchase win-back campaign (email/discount within "
+        f"30-45 days) would likely have more impact than acquisition spend alone."
+    )
+
+
+def insight_top_products(df):
+    total = df["revenue"].sum()
+    top3_share = df.head(3)["revenue"].sum() / total * 100
+    leader = df.iloc[0]
+    return (
+        f"The top 3 products alone account for {top3_share:.0f}% of top-10 revenue, led by "
+        f"{leader['product_name']} (₹{leader['revenue']/1e3:.0f}K, {int(leader['units_sold']):,} units). "
+        f"That concentration is a supply-chain risk as much as a strength — a stockout on "
+        f"{leader['product_name']} would disproportionately hurt revenue, so it's worth "
+        f"prioritizing inventory buffer and supplier reliability there specifically."
+    )
+
+
+def insight_city(df):
+    top, bottom = df.iloc[0], df.iloc[-1]
+    top3_share = df.head(3)["revenue"].sum() / df["revenue"].sum() * 100
+    gap_pct = (top["revenue"] - bottom["revenue"]) / bottom["revenue"] * 100
+    return (
+        f"{top['city']} leads at ₹{top['revenue']/1e6:.1f}M, {gap_pct:.0f}% higher than the "
+        f"lowest city, {bottom['city']}. The top 3 cities generate {top3_share:.0f}% of total "
+        f"revenue — expansion marketing spend is likely better targeted at tier-2 cities "
+        f"like {bottom['city']} or {df.iloc[-2]['city']} where the ceiling hasn't been tested, "
+        f"rather than deepening an already-saturated top market."
+    )
+
+
+def insight_weekly(df):
+    # STRFTIME week-bucketing can produce a truncated partial week at a
+    # year boundary (far fewer orders than a normal week) — exclude those
+    # before picking the "latest" week so the headline number isn't a
+    # partial-period artifact.
+    median_orders = df["orders"].median()
+    stable = df[df["orders"] >= median_orders * 0.5]
+    if len(stable) < 2:
+        stable = df
+    latest, prev = stable.iloc[0], stable.iloc[1]
+    change_pct = (latest["revenue"] - prev["revenue"]) / prev["revenue"] * 100
+    direction = "up" if change_pct >= 0 else "down"
+    return (
+        f"Latest full week ({latest['week']}) closed {direction} {abs(change_pct):.0f}% "
+        f"week-over-week at ₹{latest['revenue']:,.0f} across {int(latest['orders']):,} orders. "
+        f"This table is what used to take a manual Excel pull each Monday — it now regenerates "
+        f"automatically from the same SQL views everything else on this page uses."
+    )
+
+
 # ── HTML Report Generator ─────────────────────────────────────────────────
 def generate_html_report(kpis: dict, output="reports/index.html"):
     summary = kpis["revenue_summary"].iloc[0]
@@ -144,6 +253,13 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
     img_retention= chart_retention(kpis["retention"])
     img_products = chart_top_products(kpis["top_products"])
     img_city     = chart_city(kpis["city_leaderboard"])
+
+    txt_trend     = insight_revenue_trend(kpis["monthly_trend"])
+    txt_category  = insight_category(kpis["category_revenue"])
+    txt_retention = insight_retention(kpis["retention"])
+    txt_products  = insight_top_products(kpis["top_products"])
+    txt_city      = insight_city(kpis["city_leaderboard"])
+    txt_weekly    = insight_weekly(kpis["weekly_report"])
 
     weekly_rows = ""
     for _, r in kpis["weekly_report"].iterrows():
@@ -191,11 +307,59 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
   .bronze {{ background:#92400e; color:#fde68a; }}
   .silver {{ background:#334155; color:#e2e8f0; }}
   .gold   {{ background:#78350f; color:#fef3c7; }}
+
+  /* Click-navigable section jump bar */
+  .navbar {{ position:sticky; top:0; z-index:10; display:flex; flex-wrap:wrap; gap:6px;
+             background:rgba(15,23,42,.92); backdrop-filter:blur(6px);
+             padding:10px 0 14px; margin-bottom:8px; border-bottom:1px solid #334155; }}
+  .navbar a {{ color:#cbd5e1; text-decoration:none; font-size:.78rem; font-weight:600;
+               padding:6px 12px; border-radius:999px; border:1px solid #334155;
+               background:#1e293b; transition:background .15s,color .15s; }}
+  .navbar a:hover {{ background:#3b82f6; color:#fff; border-color:#3b82f6; }}
+  .navbar a.active {{ background:#3b82f6; color:#fff; border-color:#3b82f6; }}
+  /* Applied to every anchor target, not just .section — several nav
+     links point at inner divs (#category, #retention, #products, #city)
+     that don't carry the .section class, and without this they scroll
+     to top:0 and land hidden behind the sticky navbar, which looks like
+     the click did nothing even though it did scroll. */
+  [id] {{ scroll-margin-top:90px; }}
+  /* Flash the jumped-to section so a click is visibly obvious even in a
+     viewer that renders the whole page at once with nothing to scroll. */
+  @keyframes sectionFlash {{
+    0%   {{ background-color:rgba(59,130,246,.28); }}
+    100% {{ background-color:transparent; }}
+  }}
+  [id].flash {{ animation:sectionFlash 1.4s ease; border-radius:12px; }}
+
+  /* Collapsible "Business Insight" panels — click to expand/collapse */
+  details.insight {{ margin-top:12px; background:#0f172a; border:1px solid #334155;
+                      border-radius:10px; overflow:hidden; }}
+  details.insight summary {{ cursor:pointer; list-style:none; padding:10px 14px;
+                              font-size:.82rem; font-weight:600; color:#93c5fd;
+                              display:flex; align-items:center; gap:8px;
+                              user-select:none; }}
+  details.insight summary::-webkit-details-marker {{ display:none; }}
+  details.insight summary::before {{ content:"▸"; display:inline-block;
+                              transition:transform .15s; color:#3b82f6; }}
+  details.insight[open] summary::before {{ transform:rotate(90deg); }}
+  details.insight summary:hover {{ background:#1e293b; }}
+  details.insight .insight-body {{ padding:0 16px 14px 34px; color:#cbd5e1;
+                              font-size:.85rem; line-height:1.55; }}
 </style>
 </head>
 <body>
 
-<h1>📊 SQL Business Intelligence Dashboard</h1>
+<nav class="navbar">
+  <a href="#overview">Overview</a>
+  <a href="#revenue">Revenue Trend</a>
+  <a href="#category">Category</a>
+  <a href="#retention">Retention</a>
+  <a href="#products">Top Products</a>
+  <a href="#city">Cities</a>
+  <a href="#weekly">Weekly Report</a>
+</nav>
+
+<h1 id="overview">📊 SQL Business Intelligence Dashboard</h1>
 <p class="subtitle">
   <span class="badge">SQL</span>
   <span class="badge">CTEs</span>
@@ -238,43 +402,77 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
 </div>
 
 <!-- Revenue Trend -->
-<div class="section">
+<div class="section" id="revenue">
   <h2>📈 Revenue & Profit Trend</h2>
-  <div class="chart-card"><img src="{img_trend}"></div>
+  <div class="chart-card">
+    <img src="{img_trend}">
+    <details class="insight">
+      <summary>Business Insight</summary>
+      <div class="insight-body">{txt_trend}</div>
+    </details>
+  </div>
 </div>
 
 <!-- Category + Retention -->
 <div class="section grid-2">
-  <div>
+  <div id="category">
     <h2>🛒 Category Performance</h2>
-    <div class="chart-card"><img src="{img_category}"></div>
+    <div class="chart-card">
+      <img src="{img_category}">
+      <details class="insight">
+        <summary>Business Insight</summary>
+        <div class="insight-body">{txt_category}</div>
+      </details>
+    </div>
   </div>
-  <div>
+  <div id="retention">
     <h2>👥 Customer Retention</h2>
-    <div class="chart-card"><img src="{img_retention}"></div>
+    <div class="chart-card">
+      <img src="{img_retention}">
+      <details class="insight">
+        <summary>Business Insight</summary>
+        <div class="insight-body">{txt_retention}</div>
+      </details>
+    </div>
   </div>
 </div>
 
 <!-- Products + City -->
 <div class="section grid-2">
-  <div>
+  <div id="products">
     <h2>🏆 Top Products</h2>
-    <div class="chart-card"><img src="{img_products}"></div>
+    <div class="chart-card">
+      <img src="{img_products}">
+      <details class="insight">
+        <summary>Business Insight</summary>
+        <div class="insight-body">{txt_products}</div>
+      </details>
+    </div>
   </div>
-  <div>
+  <div id="city">
     <h2>🏙️ City Leaderboard</h2>
-    <div class="chart-card"><img src="{img_city}"></div>
+    <div class="chart-card">
+      <img src="{img_city}">
+      <details class="insight">
+        <summary>Business Insight</summary>
+        <div class="insight-body">{txt_city}</div>
+      </details>
+    </div>
   </div>
 </div>
 
 <!-- Weekly Automated Report -->
-<div class="section">
+<div class="section" id="weekly">
   <h2>⚡ Automated Weekly Report (replaces manual Excel — saves 40% effort)</h2>
   <div class="chart-card">
     <table>
       <thead><tr><th>Week</th><th>Orders</th><th>Customers</th><th>Revenue</th></tr></thead>
       <tbody>{weekly_rows}</tbody>
     </table>
+    <details class="insight">
+      <summary>Business Insight</summary>
+      <div class="insight-body">{txt_weekly}</div>
+    </details>
   </div>
 </div>
 
@@ -282,6 +480,26 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
   SQL BI Dashboard · Rani Sharma · NIT Jamshedpur · Production & Industrial Engineering<br>
   Built with: SQLite · Python · Pandas · Matplotlib · CTEs · Window Functions · Cohort Analysis
 </div>
+
+<script>
+// Give nav clicks a guaranteed visible reaction — highlight the clicked
+// button and flash the target section — instead of relying purely on
+// scroll position, which some embedded/inline HTML viewers don't show.
+document.querySelectorAll('.navbar a').forEach(function(link) {{
+  link.addEventListener('click', function() {{
+    document.querySelectorAll('.navbar a').forEach(function(l) {{ l.classList.remove('active'); }});
+    link.classList.add('active');
+
+    var targetId = link.getAttribute('href').slice(1);
+    var target = document.getElementById(targetId);
+    if (target) {{
+      target.classList.remove('flash');
+      void target.offsetWidth; // restart the animation if clicked twice
+      target.classList.add('flash');
+    }}
+  }});
+}});
+</script>
 
 </body></html>"""
 
