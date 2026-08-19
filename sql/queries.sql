@@ -106,6 +106,21 @@ SELECT
 FROM monthly
 ORDER BY month;
 
+-- S3: Customer lifetime value view — built on top of S1's enriched view
+-- (Silver → Silver), so any downstream query needing per-customer LTV
+-- reads from one definition instead of re-deriving the aggregation.
+-- Persisted in the database as vw_customer_ltv (created in etl_pipeline.py).
+--
+-- CREATE VIEW vw_customer_ltv AS
+-- SELECT
+--     customer_id, customer_name, segment, city,
+--     COUNT(DISTINCT order_id)    AS total_orders,
+--     ROUND(SUM(line_revenue), 2) AS lifetime_revenue,
+--     MIN(order_date)             AS first_order_date,
+--     MAX(order_date)             AS last_order_date
+-- FROM vw_enriched_orders
+-- GROUP BY customer_id, customer_name, segment, city;
+
 
 -- ============================================================
 -- GOLD LAYER: KPI Dashboards
@@ -305,3 +320,13 @@ JOIN order_items oi ON o.order_id    = oi.order_id
 WHERE o.status = 'Completed'
 GROUP BY c.city
 ORDER BY city_rank;
+
+-- G11: Top 10 customers by lifetime value (Window Function — RANK,
+-- reading from the vw_customer_ltv view instead of re-deriving the
+-- aggregation inline — this is the payoff of defining S3 as a view)
+SELECT
+    customer_name, segment, city, total_orders, lifetime_revenue,
+    RANK() OVER (ORDER BY lifetime_revenue DESC) AS ltv_rank
+FROM vw_customer_ltv
+ORDER BY ltv_rank
+LIMIT 10;

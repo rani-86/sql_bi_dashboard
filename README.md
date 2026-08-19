@@ -99,7 +99,7 @@ sql_bi_dashboard/
 ├── dashboard.py          ← Generates the BI report (HTML)
 │
 ├── sql/
-│   └── queries.sql       ← All business logic in SQL (10 queries)
+│   └── queries.sql       ← All business logic in SQL (11 queries + 2 views + 1 trigger)
 │
 ├── data/
 │   └── business.db       ← SQLite database
@@ -160,6 +160,7 @@ ORDER BY cohort_month, activity_month;
 | **Subqueries** | Cohort size calculation |
 | **STRFTIME** | Time-series grouping by month and week |
 | **Triggers** | `trg_log_order_status_change` auto-logs every order status transition (Processing → Completed/Returned/Cancelled) into `order_audit_log` |
+| **Views (reusable, layered)** | `vw_enriched_orders` (Silver) → `vw_customer_ltv` built on top of it (Silver→Silver) → queried by G11's `RANK()` window function (Gold) |
 
 ---
 
@@ -167,14 +168,17 @@ ORDER BY cohort_month, activity_month;
 
 ```
 customers ──────────── orders ──────────── order_items ──── products
-(500 rows)            (20,000 rows)        (~50,000 rows)   (75 rows)
-│                     │                   │                 │
-customer_id PK        order_id PK         item_id PK        product_id PK
-name                  customer_id FK      order_id FK       product_name
-email                 order_date          product_id FK     category
-city                  status              quantity          cost_price
-segment               payment_method      unit_price        sell_price
-signup_date                               discount
+(1,800 rows)           (~13,000 rows)       (~33,000 rows)   (75 rows)
+│                     │        │                             │
+customer_id PK        order_id PK                             product_id PK
+name                  customer_id FK                          product_name
+email                 order_date                              category
+city                  status ─────► order_audit_log            cost_price
+segment               payment_method  (via trigger)             sell_price
+signup_date
+
+Views:  vw_enriched_orders  (orders ⋈ customers ⋈ order_items ⋈ products, Completed only)
+        vw_customer_ltv     (vw_enriched_orders grouped per customer)
 ```
 
 ---
@@ -192,10 +196,24 @@ python main.py
 # → reports/index.html (double-click the file)
 ```
 
+Charts are rendered with [Chart.js](https://www.chartjs.org/) loaded from a CDN — hover any chart for exact figures, click a legend entry to toggle that series on/off. This means the dashboard needs an internet connection to render charts (the KPI cards, tables, and insight panels all still work offline).
+
 To explore the database with SQL directly:
 1. Download [DB Browser for SQLite](https://sqlitebrowser.org/dl/) — free
 2. Open `data/business.db`
 3. Paste any query from `sql/queries.sql` into the Execute SQL tab
+
+---
+
+## ⚠️ Known Limitations
+
+Documented deliberately, not hidden:
+
+1. **All data is synthetic**, generated with deliberate skew (weighted cities/segments, category-specific pricing, per-customer loyalty tiers) rather than sourced from a real business — it's designed to *look* realistic, not to *be* real.
+2. **Customer signups are spread uniformly across the 3-year window** rather than modeling actual acquisition-channel growth (e.g. accelerating marketing spend, seasonal campaigns) — real acquisition curves are rarely linear.
+3. **The order-status trigger fires on a synthetic INSERT-then-UPDATE pattern** built specifically to populate `order_audit_log` for demonstration — a production system would log status changes as they happen through the application layer, not via a bulk data-generation script.
+4. **`vw_customer_ltv` uses lifetime revenue, not margin** — a customer who buys high-revenue/low-margin Grocery items could rank above a lower-revenue/high-margin Electronics buyer who is actually more profitable. A profit-based LTV view would be a more decision-useful ranking.
+5. **Business insight text is template-based**, not a generative model — the sentence structure is fixed and only the numbers/entities are computed live from the data.
 
 ---
 
@@ -207,7 +225,7 @@ To explore the database with SQL directly:
 | Date range | Jan 2022 – Dec 2024 (3 years) |
 | KPI dashboards built | 5 (Revenue, Retention, Cohort, Leaderboard, Weekly) |
 | Reporting automation | 40% reduction in manual effort |
-| SQL queries written | 10 production-quality queries |
+| SQL queries written | 11 production-quality queries, 2 views, 1 trigger |
 | Customer segments tracked | Consumer, Corporate, SMB |
 
 ---

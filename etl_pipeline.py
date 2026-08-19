@@ -66,9 +66,26 @@ def silver_create_views(conn):
         JOIN order_items oi ON o.order_id    = oi.order_id
         JOIN products    p  ON oi.product_id = p.product_id
         WHERE o.status = 'Completed';
+
+        -- A second, reusable Silver->Gold view built on top of the first —
+        -- any query needing per-customer lifetime value can select from
+        -- this instead of re-deriving it, which is the actual point of a
+        -- view (a single source of truth for a metric definition).
+        DROP VIEW IF EXISTS vw_customer_ltv;
+        CREATE VIEW vw_customer_ltv AS
+        SELECT
+            customer_id, customer_name, segment, city,
+            COUNT(DISTINCT order_id)    AS total_orders,
+            ROUND(SUM(line_revenue), 2) AS lifetime_revenue,
+            MIN(order_date)             AS first_order_date,
+            MAX(order_date)             AS last_order_date
+        FROM vw_enriched_orders
+        GROUP BY customer_id, customer_name, segment, city;
     """)
     row_count = pd.read_sql("SELECT COUNT(*) AS n FROM vw_enriched_orders", conn).iloc[0]["n"]
     print(f"   vw_enriched_orders created — {row_count:,} completed line items")
+    ltv_rows = pd.read_sql("SELECT COUNT(*) AS n FROM vw_customer_ltv", conn).iloc[0]["n"]
+    print(f"   vw_customer_ltv created — {ltv_rows:,} customers")
 
 
 # ─────────────────────────────────────────────
@@ -191,6 +208,20 @@ def gold_weekly_report(conn) -> pd.DataFrame:
     """, conn)
 
 
+def gold_top_customers(conn) -> pd.DataFrame:
+    """Top 10 customers by lifetime value, ranked with RANK() over
+    vw_customer_ltv — demonstrates a window function reading from a
+    view rather than re-deriving the aggregation inline."""
+    return pd.read_sql("""
+        SELECT
+            customer_name, segment, city, total_orders, lifetime_revenue,
+            RANK() OVER (ORDER BY lifetime_revenue DESC) AS ltv_rank
+        FROM vw_customer_ltv
+        ORDER BY ltv_rank
+        LIMIT 10
+    """, conn)
+
+
 # ─────────────────────────────────────────────
 # FULL PIPELINE
 # ─────────────────────────────────────────────
@@ -210,6 +241,7 @@ def run_pipeline():
         "city_leaderboard": gold_city_leaderboard(conn),
         "top_products":     gold_top_products(conn),
         "weekly_report":    gold_weekly_report(conn),
+        "top_customers":    gold_top_customers(conn),
     }
     for name, df in kpis.items():
         print(f"   ✅ {name:<22} → {len(df):>4} rows")

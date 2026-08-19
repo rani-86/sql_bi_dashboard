@@ -1,22 +1,19 @@
 """
 dashboard.py
-Generates a full HTML Business Intelligence report with all KPI charts.
+Generates a full HTML Business Intelligence report with interactive charts
+(Chart.js — hover tooltips, click-to-toggle series in the legend) instead
+of static images, plus auto-computed business insight panels.
 Run: python dashboard.py
-Output: reports/bi_dashboard.html
+Output: reports/index.html (mirrored to root index.html for GitHub Pages)
 """
 
-import sqlite3
-import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-import base64, io, os
+import json
+import os
 from etl_pipeline import run_pipeline
 
 os.makedirs("reports", exist_ok=True)
 
-# ── Chart helpers ─────────────────────────────────────────────────────────
+# ── Palette (shared between CSS and Chart.js configs) ─────────────────────
 DARK  = "#0f172a"
 CARD  = "#1e293b"
 BLUE  = "#3b82f6"
@@ -26,113 +23,7 @@ ORG   = "#f59e0b"
 RED   = "#ef4444"
 TEXT  = "#f1f5f9"
 MUTED = "#94a3b8"
-
-def fig_to_b64(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight",
-                facecolor=DARK, dpi=120)
-    buf.seek(0)
-    b64 = base64.b64encode(buf.read()).decode()
-    plt.close(fig)
-    return f"data:image/png;base64,{b64}"
-
-
-def chart_monthly_revenue(df):
-    fig, ax = plt.subplots(figsize=(10, 4), facecolor=DARK)
-    ax.set_facecolor(DARK)
-    ax.plot(df["month"], df["revenue"], color=BLUE,  lw=2, label="Revenue")
-    ax.plot(df["month"], df["profit"],  color=GREEN, lw=2, label="Profit", linestyle="--")
-    ax.fill_between(df["month"], df["revenue"], alpha=0.12, color=BLUE)
-    ax.set_title("Monthly Revenue & Profit Trend", color=TEXT, fontsize=13, pad=12)
-    ax.tick_params(colors=MUTED, labelsize=8)
-    ax.xaxis.set_major_locator(mticker.MultipleLocator(6))
-    plt.xticks(rotation=45)
-    ax.spines[["top","right","left","bottom"]].set_color("#334155")
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x,_: f"₹{x/1e6:.1f}M"))
-    ax.legend(facecolor=CARD, labelcolor=TEXT, fontsize=9)
-    fig.tight_layout()
-    return fig_to_b64(fig)
-
-
-def chart_category(df):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), facecolor=DARK)
-    colors = [BLUE, GREEN, PURP, ORG, RED]
-
-    ax1 = axes[0]; ax1.set_facecolor(DARK)
-    bars = ax1.barh(df["category"], df["revenue"], color=colors[:len(df)])
-    ax1.set_title("Revenue by Category", color=TEXT, fontsize=11, pad=8)
-    ax1.tick_params(colors=MUTED, labelsize=9)
-    ax1.spines[["top","right","left","bottom"]].set_color("#334155")
-    ax1.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x,_: f"₹{x/1e6:.1f}M"))
-    for bar, val in zip(bars, df["revenue"]):
-        ax1.text(bar.get_width()*0.98, bar.get_y()+bar.get_height()/2,
-                 f"₹{val/1e6:.1f}M", va="center", ha="right", color=DARK, fontsize=8, fontweight="bold")
-
-    ax2 = axes[1]; ax2.set_facecolor(DARK)
-    ax2.bar(df["category"], df["margin_pct"], color=GREEN, alpha=0.8)
-    ax2.set_title("Profit Margin % by Category", color=TEXT, fontsize=11, pad=8)
-    ax2.tick_params(colors=MUTED, labelsize=9)
-    ax2.spines[["top","right","left","bottom"]].set_color("#334155")
-    ax2.set_ylabel("%", color=MUTED)
-    plt.xticks(rotation=20)
-
-    fig.tight_layout()
-    return fig_to_b64(fig)
-
-
-def chart_retention(df):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), facecolor=DARK)
-
-    ax1 = axes[0]; ax1.set_facecolor(DARK)
-    ax1.bar(df["month"], df["new_customers"],       color=GREEN, label="New",       alpha=0.9)
-    ax1.bar(df["month"], df["returning_customers"], color=BLUE,  label="Returning", alpha=0.9,
-            bottom=df["new_customers"])
-    ax1.set_title("New vs Returning Customers", color=TEXT, fontsize=11, pad=8)
-    ax1.tick_params(colors=MUTED, labelsize=7)
-    ax1.xaxis.set_major_locator(mticker.MultipleLocator(4))
-    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
-    ax1.spines[["top","right","left","bottom"]].set_color("#334155")
-    ax1.legend(facecolor=CARD, labelcolor=TEXT, fontsize=9)
-
-    ax2 = axes[1]; ax2.set_facecolor(DARK)
-    ret_rate = df["returning_customers"] / df["active_customers"] * 100
-    ax2.plot(df["month"], ret_rate, color=PURP, lw=2, marker="o", markersize=3)
-    ax2.fill_between(df["month"], ret_rate, alpha=0.15, color=PURP)
-    ax2.set_title("Retention Rate %", color=TEXT, fontsize=11, pad=8)
-    ax2.tick_params(colors=MUTED, labelsize=7)
-    ax2.xaxis.set_major_locator(mticker.MultipleLocator(4))
-    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45)
-    ax2.spines[["top","right","left","bottom"]].set_color("#334155")
-    ax2.set_ylabel("%", color=MUTED)
-
-    fig.tight_layout()
-    return fig_to_b64(fig)
-
-
-def chart_top_products(df):
-    fig, ax = plt.subplots(figsize=(10, 4), facecolor=DARK)
-    ax.set_facecolor(DARK)
-    colors = [BLUE if i < 3 else MUTED for i in range(len(df))]
-    bars = ax.barh(df["product_name"][::-1], df["revenue"][::-1], color=colors[::-1])
-    ax.set_title("Top 10 Products by Revenue", color=TEXT, fontsize=11, pad=8)
-    ax.tick_params(colors=MUTED, labelsize=8)
-    ax.spines[["top","right","left","bottom"]].set_color("#334155")
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x,_: f"₹{x/1e3:.0f}K"))
-    fig.tight_layout()
-    return fig_to_b64(fig)
-
-
-def chart_city(df):
-    fig, ax = plt.subplots(figsize=(10, 4), facecolor=DARK)
-    ax.set_facecolor(DARK)
-    ax.bar(df["city"], df["revenue"], color=ORG, alpha=0.85)
-    ax.set_title("Revenue by City", color=TEXT, fontsize=11, pad=8)
-    ax.tick_params(colors=MUTED, labelsize=9)
-    ax.spines[["top","right","left","bottom"]].set_color("#334155")
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x,_: f"₹{x/1e6:.1f}M"))
-    plt.xticks(rotation=20)
-    fig.tight_layout()
-    return fig_to_b64(fig)
+GRID  = "#1e293b"
 
 
 # ── Business insight text (computed live from the KPI tables, not
@@ -224,6 +115,21 @@ def insight_city(df):
     )
 
 
+def insight_top_customers(df):
+    leader = df.iloc[0]
+    top10_total = df["lifetime_revenue"].sum()
+    corporate_count = (df["segment"] == "Corporate").sum()
+    return (
+        f"{leader['customer_name']} is the highest-LTV customer at "
+        f"₹{leader['lifetime_revenue']:,.0f} across {int(leader['total_orders'])} orders. "
+        f"{corporate_count} of the top 10 are Corporate-segment accounts — "
+        f"if that segment is over-represented here relative to its share of the "
+        f"total customer base, it's a signal to prioritize account management "
+        f"for Corporate customers specifically rather than treating all segments "
+        f"the same in retention efforts."
+    )
+
+
 def insight_weekly(df):
     # STRFTIME week-bucketing can produce a truncated partial week at a
     # year boundary (far fewer orders than a normal week) — exclude those
@@ -244,22 +150,202 @@ def insight_weekly(df):
     )
 
 
+# ── Chart.js data + config builder ─────────────────────────────────────────
+# All charts are real Chart.js instances (not static images): hovering
+# shows a tooltip with the exact figure, and clicking a legend entry
+# toggles that series on/off — genuine interactivity, not just navigation.
+def build_chart_script(kpis):
+    trend = kpis["monthly_trend"]
+    category = kpis["category_revenue"]
+    retention = kpis["retention"]
+    products = kpis["top_products"]
+    city = kpis["city_leaderboard"]
+
+    ret_rate = (retention["returning_customers"] / retention["active_customers"] * 100).round(1)
+
+    data = {
+        "trendLabels": list(trend["month"]),
+        "trendRevenue": [round(float(v), 2) for v in trend["revenue"]],
+        "trendProfit": [round(float(v), 2) for v in trend["profit"]],
+
+        "catLabels": list(category["category"]),
+        "catRevenue": [round(float(v), 2) for v in category["revenue"]],
+        "catMargin": [round(float(v), 2) for v in category["margin_pct"]],
+
+        "retMonths": list(retention["month"]),
+        "retNew": [int(v) for v in retention["new_customers"]],
+        "retReturning": [int(v) for v in retention["returning_customers"]],
+        "retRate": [round(float(v), 1) for v in ret_rate],
+
+        # Charted bottom-to-top (largest at top) — matching the original
+        # horizontal-bar layout.
+        "prodLabels": list(products["product_name"])[::-1],
+        "prodRevenue": [round(float(v), 2) for v in products["revenue"]][::-1],
+
+        "cityLabels": list(city["city"]),
+        "cityRevenue": [round(float(v), 2) for v in city["revenue"]],
+    }
+    d = json.dumps(data)
+
+    return f"""
+const D = {d};
+const TEXT_COLOR = "{TEXT}";
+const MUTED_COLOR = "{MUTED}";
+const GRID_COLOR = "{GRID}";
+
+Chart.defaults.color = MUTED_COLOR;
+Chart.defaults.font.family = "'Segoe UI', sans-serif";
+
+function fmtM(v) {{ return "₹" + (v / 1e6).toFixed(1) + "M"; }}
+function fmtK(v) {{ return "₹" + (v / 1e3).toFixed(0) + "K"; }}
+
+new Chart(document.getElementById("chartTrend"), {{
+  type: "line",
+  data: {{
+    labels: D.trendLabels,
+    datasets: [
+      {{ label: "Revenue", data: D.trendRevenue, borderColor: "{BLUE}",
+         backgroundColor: "rgba(59,130,246,.15)", fill: true, tension: .3, pointRadius: 0 }},
+      {{ label: "Profit", data: D.trendProfit, borderColor: "{GREEN}",
+         borderDash: [6, 4], fill: false, tension: .3, pointRadius: 0 }}
+    ]
+  }},
+  options: {{
+    responsive: true,
+    interaction: {{ mode: "index", intersect: false }},
+    plugins: {{
+      legend: {{ labels: {{ color: TEXT_COLOR }} }},
+      tooltip: {{ callbacks: {{ label: ctx => ctx.dataset.label + ": " + fmtM(ctx.parsed.y) }} }}
+    }},
+    scales: {{
+      x: {{ ticks: {{ maxTicksLimit: 12 }}, grid: {{ color: GRID_COLOR }} }},
+      y: {{ ticks: {{ callback: fmtM }}, grid: {{ color: GRID_COLOR }} }}
+    }}
+  }}
+}});
+
+new Chart(document.getElementById("chartCategoryRevenue"), {{
+  type: "bar",
+  data: {{
+    labels: D.catLabels,
+    datasets: [{{ label: "Revenue", data: D.catRevenue,
+      backgroundColor: ["{BLUE}", "{GREEN}", "{PURP}", "{ORG}", "{RED}"] }}]
+  }},
+  options: {{
+    indexAxis: "y", responsive: true,
+    plugins: {{ legend: {{ display: false }},
+      tooltip: {{ callbacks: {{ label: ctx => fmtM(ctx.parsed.x) }} }} }},
+    scales: {{
+      x: {{ ticks: {{ callback: fmtM }}, grid: {{ color: GRID_COLOR }} }},
+      y: {{ grid: {{ display: false }} }}
+    }}
+  }}
+}});
+
+new Chart(document.getElementById("chartCategoryMargin"), {{
+  type: "bar",
+  data: {{
+    labels: D.catLabels,
+    datasets: [{{ label: "Margin %", data: D.catMargin, backgroundColor: "{GREEN}" }}]
+  }},
+  options: {{
+    responsive: true,
+    plugins: {{ legend: {{ display: false }},
+      tooltip: {{ callbacks: {{ label: ctx => ctx.parsed.y + "%" }} }} }},
+    scales: {{
+      x: {{ grid: {{ display: false }} }},
+      y: {{ ticks: {{ callback: v => v + "%" }}, grid: {{ color: GRID_COLOR }} }}
+    }}
+  }}
+}});
+
+new Chart(document.getElementById("chartRetentionSplit"), {{
+  type: "bar",
+  data: {{
+    labels: D.retMonths,
+    datasets: [
+      {{ label: "New", data: D.retNew, backgroundColor: "{GREEN}", stack: "s" }},
+      {{ label: "Returning", data: D.retReturning, backgroundColor: "{BLUE}", stack: "s" }}
+    ]
+  }},
+  options: {{
+    responsive: true,
+    plugins: {{ legend: {{ labels: {{ color: TEXT_COLOR }} }} }},
+    scales: {{
+      x: {{ stacked: true, ticks: {{ maxTicksLimit: 10 }} }},
+      y: {{ stacked: true, grid: {{ color: GRID_COLOR }} }}
+    }}
+  }}
+}});
+
+new Chart(document.getElementById("chartRetentionRate"), {{
+  type: "line",
+  data: {{
+    labels: D.retMonths,
+    datasets: [{{ label: "Retention Rate %", data: D.retRate, borderColor: "{PURP}",
+      backgroundColor: "rgba(139,92,246,.15)", fill: true, tension: .3, pointRadius: 0 }}]
+  }},
+  options: {{
+    responsive: true,
+    plugins: {{ legend: {{ display: false }},
+      tooltip: {{ callbacks: {{ label: ctx => ctx.parsed.y + "%" }} }} }},
+    scales: {{
+      x: {{ ticks: {{ maxTicksLimit: 10 }} }},
+      y: {{ ticks: {{ callback: v => v + "%" }}, grid: {{ color: GRID_COLOR }} }}
+    }}
+  }}
+}});
+
+new Chart(document.getElementById("chartProducts"), {{
+  type: "bar",
+  data: {{
+    labels: D.prodLabels,
+    datasets: [{{ label: "Revenue", data: D.prodRevenue,
+      backgroundColor: D.prodLabels.map((_, i) => i >= D.prodLabels.length - 3 ? "{BLUE}" : "{MUTED}") }}]
+  }},
+  options: {{
+    indexAxis: "y", responsive: true,
+    plugins: {{ legend: {{ display: false }},
+      tooltip: {{ callbacks: {{ label: ctx => fmtK(ctx.parsed.x) }} }} }},
+    scales: {{
+      x: {{ ticks: {{ callback: fmtK }}, grid: {{ color: GRID_COLOR }} }},
+      y: {{ grid: {{ display: false }} }}
+    }}
+  }}
+}});
+
+new Chart(document.getElementById("chartCity"), {{
+  type: "bar",
+  data: {{
+    labels: D.cityLabels,
+    datasets: [{{ label: "Revenue", data: D.cityRevenue, backgroundColor: "{ORG}" }}]
+  }},
+  options: {{
+    responsive: true,
+    plugins: {{ legend: {{ display: false }},
+      tooltip: {{ callbacks: {{ label: ctx => fmtM(ctx.parsed.y) }} }} }},
+    scales: {{
+      x: {{ grid: {{ display: false }} }},
+      y: {{ ticks: {{ callback: fmtM }}, grid: {{ color: GRID_COLOR }} }}
+    }}
+  }}
+}});
+"""
+
+
 # ── HTML Report Generator ─────────────────────────────────────────────────
 def generate_html_report(kpis: dict, output="reports/index.html"):
     summary = kpis["revenue_summary"].iloc[0]
-
-    img_trend    = chart_monthly_revenue(kpis["monthly_trend"])
-    img_category = chart_category(kpis["category_revenue"])
-    img_retention= chart_retention(kpis["retention"])
-    img_products = chart_top_products(kpis["top_products"])
-    img_city     = chart_city(kpis["city_leaderboard"])
 
     txt_trend     = insight_revenue_trend(kpis["monthly_trend"])
     txt_category  = insight_category(kpis["category_revenue"])
     txt_retention = insight_retention(kpis["retention"])
     txt_products  = insight_top_products(kpis["top_products"])
     txt_city      = insight_city(kpis["city_leaderboard"])
+    txt_customers = insight_top_customers(kpis["top_customers"])
     txt_weekly    = insight_weekly(kpis["weekly_report"])
+
+    chart_script = build_chart_script(kpis)
 
     weekly_rows = ""
     for _, r in kpis["weekly_report"].iterrows():
@@ -269,6 +355,18 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
           <td>{int(r['orders']):,}</td>
           <td>{int(r['customers']):,}</td>
           <td>₹{r['revenue']:,.0f}</td>
+        </tr>"""
+
+    customer_rows = ""
+    for _, r in kpis["top_customers"].iterrows():
+        customer_rows += f"""
+        <tr>
+          <td>#{int(r['ltv_rank'])}</td>
+          <td>{r['customer_name']}</td>
+          <td>{r['segment']}</td>
+          <td>{r['city']}</td>
+          <td>{int(r['total_orders'])}</td>
+          <td>₹{r['lifetime_revenue']:,.0f}</td>
         </tr>"""
 
     html = f"""<!DOCTYPE html>
@@ -294,7 +392,7 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
                  letter-spacing:.08em; margin-bottom:12px; }}
   .chart-card {{ background:#1e293b; border-radius:12px; padding:16px;
                   border:1px solid #334155; }}
-  .chart-card img {{ width:100%; border-radius:8px; }}
+  .chart-card canvas {{ max-height:320px; }}
   .grid-2 {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
   table {{ width:100%; border-collapse:collapse; }}
   th,td {{ padding:10px 14px; text-align:left; border-bottom:1px solid #334155;
@@ -356,6 +454,7 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
   <a href="#retention">Retention</a>
   <a href="#products">Top Products</a>
   <a href="#city">Cities</a>
+  <a href="#customers">Top Customers</a>
   <a href="#weekly">Weekly Report</a>
 </nav>
 
@@ -364,8 +463,9 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
   <span class="badge">SQL</span>
   <span class="badge">CTEs</span>
   <span class="badge">Window Functions</span>
+  <span class="badge">Triggers</span>
   <span class="badge">Cohort Analysis</span>
-  <span class="badge">ETL Automation</span>
+  <span class="badge">Interactive Charts</span>
   &nbsp;|&nbsp; Rani Sharma · NIT Jamshedpur
 </p>
 
@@ -405,7 +505,7 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
 <div class="section" id="revenue">
   <h2>📈 Revenue & Profit Trend</h2>
   <div class="chart-card">
-    <img src="{img_trend}">
+    <canvas id="chartTrend" height="90"></canvas>
     <details class="insight">
       <summary>Business Insight</summary>
       <div class="insight-body">{txt_trend}</div>
@@ -418,7 +518,8 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
   <div id="category">
     <h2>🛒 Category Performance</h2>
     <div class="chart-card">
-      <img src="{img_category}">
+      <canvas id="chartCategoryRevenue" height="150"></canvas>
+      <canvas id="chartCategoryMargin" height="120" style="margin-top:12px;"></canvas>
       <details class="insight">
         <summary>Business Insight</summary>
         <div class="insight-body">{txt_category}</div>
@@ -428,7 +529,8 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
   <div id="retention">
     <h2>👥 Customer Retention</h2>
     <div class="chart-card">
-      <img src="{img_retention}">
+      <canvas id="chartRetentionSplit" height="150"></canvas>
+      <canvas id="chartRetentionRate" height="120" style="margin-top:12px;"></canvas>
       <details class="insight">
         <summary>Business Insight</summary>
         <div class="insight-body">{txt_retention}</div>
@@ -442,7 +544,7 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
   <div id="products">
     <h2>🏆 Top Products</h2>
     <div class="chart-card">
-      <img src="{img_products}">
+      <canvas id="chartProducts" height="280"></canvas>
       <details class="insight">
         <summary>Business Insight</summary>
         <div class="insight-body">{txt_products}</div>
@@ -452,12 +554,27 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
   <div id="city">
     <h2>🏙️ City Leaderboard</h2>
     <div class="chart-card">
-      <img src="{img_city}">
+      <canvas id="chartCity" height="280"></canvas>
       <details class="insight">
         <summary>Business Insight</summary>
         <div class="insight-body">{txt_city}</div>
       </details>
     </div>
+  </div>
+</div>
+
+<!-- Top Customers by LTV -->
+<div class="section" id="customers">
+  <h2>💎 Top 10 Customers by Lifetime Value (RANK() over vw_customer_ltv)</h2>
+  <div class="chart-card">
+    <table>
+      <thead><tr><th>Rank</th><th>Customer</th><th>Segment</th><th>City</th><th>Orders</th><th>Lifetime Revenue</th></tr></thead>
+      <tbody>{customer_rows}</tbody>
+    </table>
+    <details class="insight">
+      <summary>Business Insight</summary>
+      <div class="insight-body">{txt_customers}</div>
+    </details>
   </div>
 </div>
 
@@ -478,10 +595,13 @@ def generate_html_report(kpis: dict, output="reports/index.html"):
 
 <div class="footer">
   SQL BI Dashboard · Rani Sharma · NIT Jamshedpur · Production & Industrial Engineering<br>
-  Built with: SQLite · Python · Pandas · Matplotlib · CTEs · Window Functions · Cohort Analysis
+  Built with: SQLite · Python · Pandas · Chart.js · CTEs · Window Functions · Triggers · Cohort Analysis
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script>
+{chart_script}
+
 // Give nav clicks a guaranteed visible reaction — highlight the clicked
 // button and flash the target section — instead of relying purely on
 // scroll position, which some embedded/inline HTML viewers don't show.
